@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  OPERADOR
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  apicbaseClientId           String?
+  apicbaseClientSecretEnc    String?
+  apicbaseOAuthRedirectUri   String?
+  apicbaseOAuthScopes        String? @default("accounts+library+stock")
+
+  apicbaseAuthMode          String?
+  apicbaseAccessTokenEnc    String?
+  apicbaseRefreshTokenEnc   String?
+  apicbaseAccessExpiresAt   DateTime?
+
+  users          User[]
+  imapSettings   OrganizationImapSettings?
+  invoiceDrafts  InvoiceDraft[]
+}
+
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  passwordHash   String
+  name           String
+  role           Role     @default(OPERADOR)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+/// Configuração IMAP por organização (password encriptado em repouso; nunca devolvido ao cliente).
+model OrganizationImapSettings {
+  id             String       @id @default(cuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  host       String
+  port       Int
+  security   String // SSL_TLS | STARTTLS
+  username   String
+  passwordEnc String
+  mailbox    String @default("INBOX")
+
+  /// Marco zero: emails anteriores a esta data não são processados pelo worker (IMAP SINCE).
+  monitoredSinceAt DateTime @default(now())
+  /// Quando não nulo, o worker deixa de aplicar o limite extra das 24h na primeira execução.
+  workerInitialisedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Rascunho de fatura criado a partir de email + PDF (worker IMAP).
+model InvoiceDraft {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  status String @default("PENDING")
+
+  imapMailbox     String
+  imapUid         Int
+  imapUidValidity String?
+  pdfPartId       String
+
+  emailSubject    String?
+  emailFrom       String?
+  emailReceivedAt DateTime?
+
+  /// Caminho relativo à raiz de armazenamento do worker (ex.: orgId/cuid.pdf).
+  pdfStoragePath String
+  pdfFilename    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, imapMailbox, imapUid, imapUidValidity, pdfPartId])
+  @@index([organizationId, status])
+}

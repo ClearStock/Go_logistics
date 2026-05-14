@@ -1,0 +1,108 @@
+@import 'tailwindcss';
+
+/*
+  Identidade visual Tamiini — paleta do brandbook.
+  Variáveis em :root alimentam @theme (bg-app-*, text-app-*, etc.).
+*/
+:root {
+  --brand-primary-brown: #693526;
+  --brand-cream: #fde7ce;
+  --brand-soft-white: #fff6f0;
+  --brand-dark-brown: #5e2b16;
+  --brand-success: #2a5e2e;
+  --brand-light-beige: #e1e7b8;
+  --brand-accent-yellow: #ffe586;
+  --brand-action-orange: #f7921e;
+  --brand-action-orange-hover: #e07810;
+  --brand-white: #ffffff;
+
+  --palette-bg: var(--brand-soft-white);
+  --palette-surface: var(--brand-cream);
+  --palette-surface-muted: color-mix(in srgb, var(--brand-light-beige) 55%, var(--brand-soft-white));
+  --palette-border: color-mix(in srgb, var(--brand-primary-brown) 20%, transparent);
+  --palette-border-strong: color-mix(in srgb, var(--brand-primary-brown) 35%, transparent);
+  --palette-text: var(--brand-primary-brown);
+  --palette-text-muted: #7a5348;
+  --palette-primary: var(--brand-action-orange);
+  --palette-primary-hover: var(--brand-action-orange-hover);
+  --palette-primary-muted: color-mix(in srgb, var(--brand-action-orange) 22%, var(--brand-cream));
+  --palette-success: var(--brand-success);
+  --palette-success-hover: #234f27;
+  --palette-success-muted: color-mix(in srgb, var(--brand-success) 12%, var(--brand-cream));
+  --palette-success-on: var(--brand-light-beige);
+  --palette-danger: #9b2c2c;
+  --palette-danger-hover: #7d2424;
+  --palette-danger-muted: color-mix(in srgb, #9b2c2c 12%, var(--brand-cream));
+  --palette-warning: var(--brand-primary-brown);
+  --palette-warning-muted: color-mix(in srgb, var(--brand-accent-yellow) 65%, var(--brand-cream));
+  --palette-sidebar: var(--brand-dark-brown);
+  --palette-sidebar-text: color-mix(in srgb, var(--brand-soft-white) 88%, transparent);
+  --palette-sidebar-text-dim: color-mix(in srgb, var(--brand-soft-white) 62%, transparent);
+  --palette-sidebar-active-bg: color-mix(in srgb, var(--brand-white) 8%, transparent);
+  --palette-table-base: var(--brand-white);
+  --palette-table-alt: var(--brand-light-beige);
+  --sidebar-expanded: 15rem;
+  --sidebar-collapsed: 4.25rem;
+
+  --stack-sans: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  --stack-display: 'Poppins', ui-sans-serif, system-ui, sans-serif;
+}
+
+@theme inline {
+  --font-sans: var(--stack-sans);
+  --font-display: var(--stack-display);
+
+  --color-app-bg: var(--palette-bg);
+  --color-app-surface: var(--palette-surface);
+  --color-app-surface-muted: var(--palette-surface-muted);
+  --color-app-border: var(--palette-border);
+  --color-app-border-strong: var(--palette-border-strong);
+  --color-app-text: var(--palette-text);
+  --color-app-muted: var(--palette-text-muted);
+  --color-app-primary: var(--palette-primary);
+  --color-app-primary-hover: var(--palette-primary-hover);
+  --color-app-primary-muted: var(--palette-primary-muted);
+  --color-app-success: var(--palette-success);
+  --color-app-success-hover: var(--palette-success-hover);
+  --color-app-success-muted: var(--palette-success-muted);
+  --color-app-success-on: var(--palette-success-on);
+  --color-app-danger: var(--palette-danger);
+  --color-app-danger-hover: var(--palette-danger-hover);
+  --color-app-danger-muted: var(--palette-danger-muted);
+  --color-app-warning: var(--palette-warning);
+  --color-app-warning-muted: var(--palette-warning-muted);
+  --color-app-sidebar: var(--palette-sidebar);
+  --color-app-sidebar-text: var(--palette-sidebar-text);
+  --color-app-sidebar-text-dim: var(--palette-sidebar-text-dim);
+  --color-app-sidebar-active-bg: var(--palette-sidebar-active-bg);
+  --color-app-accent-yellow: var(--brand-accent-yellow);
+  --color-app-table-base: var(--palette-table-base);
+  --color-app-table-alt: var(--palette-table-alt);
+  --width-sidebar-expanded: var(--sidebar-expanded);
+  --width-sidebar-collapsed: var(--sidebar-collapsed);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--palette-bg);
+    color: var(--palette-text);
+    font-family: var(--stack-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--stack-display);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+}
