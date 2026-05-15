@@ -1,6 +1,6 @@
 import { Mail, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { confirmVerificationDraft, fetchImapMessages, searchApicbaseProducts } from '../../api/verificationApi'
+import { confirmVerificationDraft, fetchImapMessagePdfBlob, fetchImapMessages, searchApicbaseProducts } from '../../api/verificationApi'
 import type { InboxMessageDto } from '../../api/verificationApi'
 import {
   createEmptyVerificationDraft,
@@ -19,6 +19,10 @@ function cloneRascunho(r: RascunhoVerificacao): RascunhoVerificacao {
   return { ...r, itens: r.itens.map((i) => ({ ...i })) }
 }
 
+function messageKey(m: Pick<InboxMessageDto, 'accountId' | 'uid'>): string {
+  return `${m.accountId}:${m.uid}`
+}
+
 export function VerificationWorkspace() {
   const [draft, setDraft] = useState<RascunhoVerificacao>(() => cloneRascunho(createEmptyVerificationDraft()))
   const [imapMessages, setImapMessages] = useState<InboxMessageDto[]>([])
@@ -26,7 +30,11 @@ export function VerificationWorkspace() {
   const [imapConfigured, setImapConfigured] = useState(false)
   const [imapLoading, setImapLoading] = useState(true)
   const [imapError, setImapError] = useState<string | null>(null)
-  const [selectedUid, setSelectedUid] = useState<number | null>(null)
+  const [selectedMessageKey, setSelectedMessageKey] = useState<string | null>(null)
+  const [selectedPdfIndex, setSelectedPdfIndex] = useState(0)
+  const [pdfObjectUrl, setPdfObjectUrl] = useState<string | null>(null)
+  const [pdfLoading, setPdfLoading] = useState(false)
+  const [pdfError, setPdfError] = useState<string | null>(null)
 
   const loadImap = useCallback(async () => {
     setImapLoading(true)
@@ -48,6 +56,72 @@ export function VerificationWorkspace() {
     void loadImap()
   }, [loadImap])
 
+  const selectedMessage = useMemo(() => {
+    if (!selectedMessageKey) return null
+    return imapMessages.find((x) => messageKey(x) === selectedMessageKey) ?? null
+  }, [imapMessages, selectedMessageKey])
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (!selectedMessage?.hasPdfAttachment) {
+      setPdfObjectUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev)
+        return null
+      })
+      setPdfLoading(false)
+      setPdfError(null)
+      return
+    }
+
+    setPdfLoading(true)
+    setPdfError(null)
+    setPdfObjectUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
+
+    void (async () => {
+      try {
+        const blob = await fetchImapMessagePdfBlob(
+          selectedMessage.accountId,
+          selectedMessage.uid,
+          selectedPdfIndex,
+        )
+        if (cancelled) return
+        const url = URL.createObjectURL(blob)
+        if (cancelled) {
+          URL.revokeObjectURL(url)
+          return
+        }
+        setPdfObjectUrl(url)
+      } catch (e) {
+        if (!cancelled) {
+          setPdfError(e instanceof Error ? e.message : 'Erro ao carregar PDF.')
+          setPdfObjectUrl(null)
+        }
+      } finally {
+        if (!cancelled) setPdfLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      setPdfObjectUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev)
+        return null
+      })
+    }
+  }, [selectedMessage?.accountId, selectedMessage?.uid, selectedMessage?.hasPdfAttachment, selectedPdfIndex])
+
+  useEffect(() => {
+    if (!selectedMessage?.hasPdfAttachment) return
+    const name = selectedMessage.pdfAttachmentNames[selectedPdfIndex]
+    if (name) {
+      setDraft((d) => ({ ...d, nomeArquivoPdf: name.slice(0, 240) }))
+    }
+  }, [selectedMessage, selectedPdfIndex])
+
   const dataRececaoFormatada = useMemo(
     () =>
       new Intl.DateTimeFormat('pt-PT', {
@@ -58,13 +132,15 @@ export function VerificationWorkspace() {
   )
 
   const pdfHint = useMemo(() => {
-    if (!selectedUid) return undefined
-    const m = imapMessages.find((x) => x.uid === selectedUid)
+    if (!selectedMessageKey) return undefined
+    const m = imapMessages.find((x) => messageKey(x) === selectedMessageKey)
     if (!m) return undefined
-    return m.hasPdfAttachment
-      ? `Email UID ${m.uid}: anexo PDF detetado (extração no servidor em desenvolvimento).`
-      : `Email UID ${m.uid}: sem anexo PDF detetado na estrutura da mensagem.`
-  }, [imapMessages, selectedUid])
+    if (m.hasPdfAttachment) {
+      const n = m.pdfAttachmentNames.length
+      return `${m.accountLabel} · ${n > 1 ? `${n} anexos PDF` : '1 anexo PDF'}`
+    }
+    return `${m.accountLabel} · sem PDF detectado nesta mensagem`
+  }, [imapMessages, selectedMessageKey])
 
   const onChangeField = (
     key: keyof Pick<RascunhoVerificacao, 'nomeClienteFatura' | 'clienteMapeadoApicbase' | 'moradaEntrega'>,
@@ -87,15 +163,27 @@ export function VerificationWorkspace() {
   const fetchApicbaseOptions = useCallback((q: string) => searchApicbaseProducts(q), [])
 
   const selectMessage = (m: InboxMessageDto) => {
-    setSelectedUid(m.uid)
+    setSelectedMessageKey(messageKey(m))
+    setSelectedPdfIndex(0)
     const label = m.hasPdfAttachment ? `${m.subject} · PDF` : m.subject
     setDraft((d) => ({
       ...d,
-      nomeArquivoPdf: label.slice(0, 200) || `(email UID ${m.uid})`,
+      nomeArquivoPdf: (() => {
+        if (m.hasPdfAttachment) {
+          const n = m.pdfAttachmentNames[0]
+          return (n ?? `${m.subject} · PDF`).slice(0, 240)
+        }
+        return label.slice(0, 200) || `(email ${m.accountLabel} · UID ${m.uid})`
+      })(),
       dataRececao: m.date || d.dataRececao,
       estadoRascunho: 'Email selecionado',
     }))
-    console.log('[Verify/UI] Email selecionado', { uid: m.uid, subject: m.subject, hasPdf: m.hasPdfAttachment })
+    console.log('[Verify/UI] Email selecionado', {
+      account: m.accountLabel,
+      uid: m.uid,
+      subject: m.subject,
+      hasPdf: m.hasPdfAttachment,
+    })
   }
 
   const toast = (msg: string) => {
@@ -140,9 +228,9 @@ export function VerificationWorkspace() {
             )}
             <ul className="space-y-1">
               {imapMessages.map((m) => {
-                const active = m.uid === selectedUid
+                const active = messageKey(m) === selectedMessageKey
                 return (
-                  <li key={m.uid}>
+                  <li key={messageKey(m)}>
                     <button
                       type="button"
                       onClick={() => selectMessage(m)}
@@ -152,11 +240,14 @@ export function VerificationWorkspace() {
                           : 'border-transparent bg-app-table-base hover:border-app-border'
                       }`}
                     >
+                      <span className="line-clamp-1 text-[10px] font-semibold uppercase tracking-wide text-app-primary">
+                        {m.accountLabel}
+                      </span>
                       <span className="line-clamp-2 font-medium text-app-text">{m.subject || '(sem assunto)'}</span>
                       <span className="mt-0.5 line-clamp-1 text-app-muted">{m.from}</span>
                       {m.hasPdfAttachment && (
                         <span className="mt-1 inline-block rounded bg-app-success-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase text-app-text">
-                          PDF
+                          {m.pdfAttachmentNames.length > 1 ? `${m.pdfAttachmentNames.length}× PDF` : 'PDF'}
                         </span>
                       )}
                     </button>
@@ -167,7 +258,16 @@ export function VerificationWorkspace() {
           </div>
         </aside>
 
-        <PdfViewerPanel fileName={draft.nomeArquivoPdf} hint={pdfHint} />
+        <PdfViewerPanel
+          fileName={draft.nomeArquivoPdf}
+          hint={pdfHint}
+          pdfObjectUrl={pdfObjectUrl}
+          pdfLoading={pdfLoading}
+          pdfError={pdfError}
+          pdfAttachmentNames={selectedMessage?.hasPdfAttachment ? selectedMessage.pdfAttachmentNames : undefined}
+          selectedPdfIndex={selectedPdfIndex}
+          onSelectPdfIndex={setSelectedPdfIndex}
+        />
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-app-bg">
           <header className="shrink-0 border-b border-app-border bg-app-surface px-4 py-4">

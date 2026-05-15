@@ -15,6 +15,31 @@ export type InboxMessageDto = {
   from: string
   date: string
   hasPdfAttachment: boolean
+  /** Nomes dos PDFs, na mesma ordem do parâmetro `pdfIndex` em `fetchImapMessagePdfBlob`. */
+  pdfAttachmentNames: string[]
+  accountId: string
+  accountLabel: string
+}
+
+function parseInboxMessageDto(m: unknown, accountId: string, accountLabel: string): InboxMessageDto | null {
+  if (!m || typeof m !== 'object') return null
+  const o = m as Record<string, unknown>
+  const uid = Number(o.uid)
+  if (!Number.isFinite(uid)) return null
+  const names = Array.isArray(o.pdfAttachmentNames)
+    ? o.pdfAttachmentNames.filter((x): x is string => typeof x === 'string')
+    : []
+  const hasFlag = Boolean(o.hasPdfAttachment)
+  return {
+    uid,
+    subject: typeof o.subject === 'string' ? o.subject : '',
+    from: typeof o.from === 'string' ? o.from : '',
+    date: typeof o.date === 'string' ? o.date : '',
+    hasPdfAttachment: hasFlag || names.length > 0,
+    pdfAttachmentNames: names.length > 0 ? names : hasFlag ? ['Anexo PDF'] : [],
+    accountId,
+    accountLabel,
+  }
 }
 
 export type ImapMessagesResponse = {
@@ -29,11 +54,41 @@ export async function fetchImapMessages(limit = 30): Promise<ImapMessagesRespons
   if (!res.ok) {
     throw new Error(data.error ?? `Falha IMAP (${res.status})`)
   }
+  const raw = Array.isArray(data.messages) ? data.messages : []
+  const messages: InboxMessageDto[] = []
+  for (const row of raw) {
+    const accountId = row && typeof row === 'object' && typeof (row as { accountId?: unknown }).accountId === 'string'
+      ? (row as { accountId: string }).accountId
+      : ''
+    const accountLabel =
+      row && typeof row === 'object' && typeof (row as { accountLabel?: unknown }).accountLabel === 'string'
+        ? (row as { accountLabel: string }).accountLabel
+        : ''
+    if (!accountId) continue
+    const parsed = parseInboxMessageDto(row, accountId, accountLabel)
+    if (parsed) messages.push(parsed)
+  }
   return {
     configured: data.configured,
-    messages: Array.isArray(data.messages) ? data.messages : [],
+    messages,
     hint: data.hint,
   }
+}
+
+export async function fetchImapMessagePdfBlob(
+  accountId: string,
+  uid: number,
+  pdfIndex = 0,
+): Promise<Blob> {
+  const q = pdfIndex > 0 ? `?index=${encodeURIComponent(String(pdfIndex))}` : ''
+  const res = await apiFetch(
+    `/api/integrations/imap/messages/${encodeURIComponent(accountId)}/${encodeURIComponent(String(uid))}/pdf${q}`,
+  )
+  if (!res.ok) {
+    const j = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(j.error ?? `Falha ao carregar PDF (${res.status})`)
+  }
+  return res.blob()
 }
 
 export async function searchApicbaseProducts(q: string): Promise<ApicbaseProdutoOpcao[]> {

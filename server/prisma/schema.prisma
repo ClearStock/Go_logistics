@@ -29,7 +29,7 @@ model Organization {
   apicbaseAccessExpiresAt   DateTime?
 
   users          User[]
-  imapSettings   OrganizationImapSettings?
+  imapAccounts   OrganizationImapSettings[]
   invoiceDrafts  InvoiceDraft[]
 }
 
@@ -47,11 +47,14 @@ model User {
   @@index([organizationId])
 }
 
-/// Configuração IMAP por organização (password encriptado em repouso; nunca devolvido ao cliente).
+/// Conta IMAP por organização (várias por armazém). Palavra-passe encriptada em repouso.
 model OrganizationImapSettings {
   id             String       @id @default(cuid())
-  organizationId String       @unique
+  organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Nome amigável na UI (ex.: «Faturas comercial»). Se vazio, mostra-se o email.
+  label          String?
 
   host       String
   port       Int
@@ -67,6 +70,8 @@ model OrganizationImapSettings {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
 }
 
 /// Rascunho de fatura criado a partir de email + PDF (worker IMAP).

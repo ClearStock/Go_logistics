@@ -2,6 +2,7 @@ import { ImapFlow } from 'imapflow'
 import type { OrganizationImapSettings } from '@prisma/client'
 import { decryptUtf8 } from '../crypto/fieldEncryption.js'
 import { humanizeImapError } from './imapConnectionTest.js'
+import { collectPdfAttachmentParts } from './imapPdfParts.js'
 
 export type InboxMessageSummary = {
   uid: number
@@ -9,17 +10,8 @@ export type InboxMessageSummary = {
   from: string
   date: string
   hasPdfAttachment: boolean
-}
-
-function hasPdfInStructure(st: unknown): boolean {
-  if (!st || typeof st !== 'object') return false
-  const o = st as Record<string, unknown>
-  const t = typeof o.type === 'string' ? o.type.toLowerCase() : ''
-  if (t === 'application/pdf') return true
-  const child = o.childNodes
-  if (Array.isArray(child)) return child.some((c) => hasPdfInStructure(c))
-  if (child && typeof child === 'object') return hasPdfInStructure(child)
-  return false
+  /** Nomes dos anexos PDF na ordem do BODYSTRUCTURE (índice alinhado com `?index=` no download). */
+  pdfAttachmentNames: string[]
 }
 
 /**
@@ -77,13 +69,14 @@ export async function listRecentImapMessages(
         fromAddr?.address ||
         ''
       const date = env?.date ? new Date(env.date).toISOString() : ''
-      const hasPdf = hasPdfInStructure(msg.bodyStructure)
+      const pdfParts = collectPdfAttachmentParts(msg.bodyStructure)
       out.push({
         uid: Number(msg.uid),
         subject,
         from,
         date,
-        hasPdfAttachment: hasPdf,
+        hasPdfAttachment: pdfParts.length > 0,
+        pdfAttachmentNames: pdfParts.map((p) => p.filename),
       })
     }
 

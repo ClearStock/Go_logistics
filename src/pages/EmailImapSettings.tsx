@@ -1,9 +1,11 @@
-import { ChevronRight, ChevronUp, Loader2, Mail, Shield } from 'lucide-react'
+import { ChevronRight, ChevronUp, Loader2, Mail, Pencil, Plus, Shield, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import {
-  fetchImapSettings,
-  saveImapSettings,
+  deleteImapAccount,
+  fetchImapAccounts,
+  saveImapAccount,
   testImapConnection,
+  type ImapAccountDto,
   type ImapSecurityMode,
 } from '../api/imapEmailApi'
 import { useAuth } from '../context/AuthContext'
@@ -19,6 +21,35 @@ import {
 const fieldClass =
   'w-full rounded-xl border border-app-border bg-app-table-base px-3 py-2 text-sm text-app-text outline-none transition focus:border-app-primary focus:ring-2 focus:ring-app-primary/25'
 
+function displayAccountTitle(a: ImapAccountDto): string {
+  return (a.label && a.label.trim()) || a.username
+}
+
+function resetFormForNew(
+  setProvider: (v: MailProviderId) => void,
+  setHost: (v: string) => void,
+  setPort: (v: string) => void,
+  setSecurity: (v: ImapSecurityMode) => void,
+  setUsername: (v: string) => void,
+  setPassword: (v: string) => void,
+  setMailbox: (v: string) => void,
+  setLabel: (v: string) => void,
+  setHasStoredPassword: (v: boolean) => void,
+  setShowAdvanced: (v: boolean) => void,
+) {
+  const p = MAIL_PROVIDER_PRESETS.gmail
+  setProvider('gmail')
+  setHost(p.host)
+  setPort(String(p.port))
+  setSecurity(p.security)
+  setMailbox(p.mailbox)
+  setUsername('')
+  setPassword('')
+  setLabel('')
+  setHasStoredPassword(false)
+  setShowAdvanced(false)
+}
+
 export function EmailImapSettings() {
   const { organization } = useAuth()
   const [loading, setLoading] = useState(true)
@@ -26,9 +57,11 @@ export function EmailImapSettings() {
   const [testing, setTesting] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [accounts, setAccounts] = useState<ImapAccountDto[]>([])
+  const [editingId, setEditingId] = useState<string | null>(null)
 
   const [provider, setProvider] = useState<MailProviderId>('gmail')
+  const [label, setLabel] = useState('')
   const [host, setHost] = useState(MAIL_PROVIDER_PRESETS.gmail.host)
   const [port, setPort] = useState(String(MAIL_PROVIDER_PRESETS.gmail.port))
   const [security, setSecurity] = useState<ImapSecurityMode>(MAIL_PROVIDER_PRESETS.gmail.security)
@@ -36,6 +69,7 @@ export function EmailImapSettings() {
   const [password, setPassword] = useState('')
   const [mailbox, setMailbox] = useState(DEFAULT_MAILBOX)
   const [hasStoredPassword, setHasStoredPassword] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const applyProviderPreset = useCallback((id: MailProviderId) => {
     setProvider(id)
@@ -50,40 +84,55 @@ export function EmailImapSettings() {
     setMailbox(p.mailbox)
   }, [])
 
+  const loadAccountIntoForm = useCallback(
+    (a: ImapAccountDto) => {
+      setEditingId(a.id)
+      setLabel(a.label ?? '')
+      const h = (a.host && a.host.trim()) || MAIL_PROVIDER_PRESETS.gmail.host
+      const po = a.port || (a.security === 'STARTTLS' ? 143 : 993)
+      const sec = a.security
+      const mb = a.mailbox?.trim() || DEFAULT_MAILBOX
+      setHost(h)
+      setPort(String(po))
+      setSecurity(sec)
+      setUsername(a.username)
+      setMailbox(mb)
+      setHasStoredPassword(a.hasStoredPassword)
+      setPassword('')
+      const inferred = inferMailProvider(h, po, sec, mb)
+      setProvider(inferred)
+      if (inferred === 'other' || !matchesMailPreset(inferred, h, po, sec, mb)) {
+        setShowAdvanced(true)
+      }
+    },
+    [],
+  )
+
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const s = await fetchImapSettings()
-      const h = (s.host && s.host.trim()) || MAIL_PROVIDER_PRESETS.gmail.host
-      const po = s.port || (s.security === 'STARTTLS' ? 143 : 993)
-      const sec = s.security
-      const mb = s.mailbox?.trim() || DEFAULT_MAILBOX
-      setHost(h)
-      setPort(String(po))
-      setSecurity(sec)
-      setUsername(s.username)
-      setMailbox(mb)
-      setHasStoredPassword(s.hasStoredPassword)
-      setPassword('')
-
-      const inferred = inferMailProvider(h, po, sec, mb)
-      if (s.configured) {
-        setProvider(inferred)
-        if (inferred === 'other' || !matchesMailPreset(inferred, h, po, sec, mb)) {
-          setShowAdvanced(true)
-        }
-      } else {
-        setProvider('gmail')
-        setShowAdvanced(false)
-        applyProviderPreset('gmail')
-      }
+      const list = await fetchImapAccounts()
+      setAccounts(list)
+      setEditingId(null)
+      resetFormForNew(
+        setProvider,
+        setHost,
+        setPort,
+        setSecurity,
+        setUsername,
+        setPassword,
+        setMailbox,
+        setLabel,
+        setHasStoredPassword,
+        setShowAdvanced,
+      )
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro ao carregar.')
     } finally {
       setLoading(false)
     }
-  }, [applyProviderPreset])
+  }, [])
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -171,7 +220,11 @@ export function EmailImapSettings() {
       if (provider === 'other' && !host.trim()) throw new Error('Indique o servidor IMAP nas opções avançadas.')
       const prt = effectivePort
       if (!Number.isFinite(prt) || prt < 1 || prt > 65535) throw new Error('Porta inválida. Corrija nas opções avançadas.')
-      await saveImapSettings({
+      if (!editingId && !password) throw new Error('Palavra-passe é obrigatória para uma conta nova.')
+
+      await saveImapAccount({
+        ...(editingId ? { id: editingId } : {}),
+        label: label.trim(),
         host: effectiveHost,
         port: prt,
         security: effectiveSecurity,
@@ -179,7 +232,7 @@ export function EmailImapSettings() {
         password,
         mailbox: effectiveMailbox,
       })
-      setMessage('Configuração guardada. A palavra-passe ficou apenas no servidor (encriptada).')
+      setMessage(editingId ? 'Conta actualizada.' : 'Nova conta guardada no servidor (palavra-passe encriptada).')
       setPassword('')
       setHasStoredPassword(true)
       await load()
@@ -190,6 +243,44 @@ export function EmailImapSettings() {
     }
   }
 
+  const onNewAccount = () => {
+    setEditingId(null)
+    setMessage(null)
+    setError(null)
+    resetFormForNew(
+      setProvider,
+      setHost,
+      setPort,
+      setSecurity,
+      setUsername,
+      setPassword,
+      setMailbox,
+      setLabel,
+      setHasStoredPassword,
+      setShowAdvanced,
+    )
+  }
+
+  const onDelete = async (id: string) => {
+    if (!window.confirm('Remover esta conta IMAP da organização?')) return
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    try {
+      await deleteImapAccount(id)
+      setMessage('Conta removida.')
+      if (editingId === id) onNewAccount()
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erro ao remover.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const monitoredFmt = (iso: string) =>
+    new Intl.DateTimeFormat('pt-PT', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(iso))
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-app-bg">
       <div className="border-b border-app-border bg-app-surface px-6 py-5">
@@ -198,7 +289,7 @@ export function EmailImapSettings() {
           <p className="mt-1 text-sm text-app-muted">
             {organization?.name}
             <span className="text-app-muted"> · </span>
-            <span className="text-xs">Ligação segura ao servidor; palavra-passe encriptada.</span>
+            <span className="text-xs">Várias contas por organização; palavra-passe encriptada na base de dados.</span>
           </p>
         </div>
       </div>
@@ -222,20 +313,107 @@ export function EmailImapSettings() {
             )}
 
             <section className="rounded-2xl border border-app-border bg-app-surface p-6">
-              <div className="mb-4 flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-app-primary-muted text-app-primary">
-                  <Mail className="h-5 w-5" aria-hidden />
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-app-primary-muted text-app-primary">
+                    <Mail className="h-5 w-5" aria-hidden />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-semibold text-app-text">Contas guardadas</h2>
+                    <p className="mt-1 text-xs text-app-muted">
+                      {accounts.length === 0
+                        ? 'Ainda não há contas. Use o formulário abaixo para adicionar a primeira.'
+                        : `${accounts.length} conta(s) · marco zero de monitorização por conta.`}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h2 className="text-sm font-semibold text-app-text">Conta de email</h2>
-                  <p className="mt-1 text-xs leading-relaxed text-app-muted">
-                    Escolha o <strong className="text-app-text">provedor</strong> para aplicar o servidor IMAP correcto. Para Gmail,
-                    Microsoft 365 ou iCloud use uma <strong className="text-app-text">palavra-passe de aplicação</strong>.
-                  </p>
-                </div>
+                <button
+                  type="button"
+                  onClick={onNewAccount}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-app-border bg-app-table-base px-3 py-2 text-xs font-semibold text-app-text transition hover:bg-app-surface-muted"
+                >
+                  <Plus className="h-3.5 w-3.5" aria-hidden />
+                  Nova conta
+                </button>
               </div>
 
+              {accounts.length > 0 && (
+                <ul className="space-y-2">
+                  {accounts.map((a) => {
+                    const active = editingId === a.id
+                    return (
+                      <li
+                        key={a.id}
+                        className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border px-3 py-3 text-sm ${
+                          active ? 'border-app-primary bg-app-primary/5' : 'border-app-border bg-app-table-base'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-medium text-app-text">{displayAccountTitle(a)}</p>
+                          <p className="truncate text-xs text-app-muted">
+                            {a.host}:{a.port} · {a.mailbox}
+                          </p>
+                          <p className="mt-1 text-[11px] text-app-muted">
+                            Marco zero: {monitoredFmt(a.monitoredSinceAt)}
+                            {a.hasStoredPassword ? (
+                              <span className="ml-2 rounded bg-app-success-muted px-1.5 py-0.5 font-medium text-app-text">
+                                Palavra-passe guardada
+                              </span>
+                            ) : (
+                              <span className="ml-2 text-app-warning">Sem palavra-passe</span>
+                            )}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => loadAccountIntoForm(a)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-app-border text-app-muted transition hover:bg-app-surface-muted hover:text-app-text disabled:opacity-50"
+                            aria-label="Editar conta"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void onDelete(a.id)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-app-danger/30 text-app-danger transition hover:bg-app-danger-muted disabled:opacity-50"
+                            aria-label="Remover conta"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-app-border bg-app-surface p-6">
+              <h2 className="mb-1 text-sm font-semibold text-app-text">
+                {editingId ? 'Editar conta' : 'Adicionar conta'}
+              </h2>
+              <p className="mb-4 text-xs text-app-muted">
+                {editingId
+                  ? 'Altere os campos e guarde. Deixe a palavra-passe vazia para manter a actual.'
+                  : 'Preencha e guarde — pode repetir o processo para vários emails.'}
+              </p>
+
               <div className="space-y-4">
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-medium text-app-muted">Nome da conta (opcional)</span>
+                  <input
+                    className={fieldClass}
+                    type="text"
+                    value={label}
+                    onChange={(e) => setLabel(e.target.value)}
+                    placeholder="Ex.: Faturas fornecedor A"
+                    autoComplete="off"
+                  />
+                </label>
+
                 <label className="block space-y-1.5">
                   <span className="text-xs font-medium text-app-muted">Provedor de email</span>
                   <select
@@ -275,10 +453,10 @@ export function EmailImapSettings() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     autoComplete="new-password"
-                    placeholder={hasStoredPassword ? 'Deixe vazio para manter a atual' : 'Palavra-passe ou app password'}
+                    placeholder={hasStoredPassword ? 'Deixe vazio para manter a actual' : 'Palavra-passe ou app password'}
                   />
                   {hasStoredPassword && (
-                    <p className="text-[11px] text-app-muted">Já existe uma palavra-passe guardada nesta organização.</p>
+                    <p className="text-[11px] text-app-muted">Já existe palavra-passe guardada nesta conta.</p>
                   )}
                 </label>
               </div>
@@ -366,13 +544,13 @@ export function EmailImapSettings() {
                   onClick={() => void onSave()}
                   className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-app-primary px-4 text-sm font-semibold text-white transition hover:bg-app-primary-hover disabled:opacity-50"
                 >
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : 'Guardar configuração'}
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : editingId ? 'Guardar alterações' : 'Guardar nova conta'}
                 </button>
               </div>
             </section>
 
             <p className="text-center text-xs text-app-muted">
-              O processamento automático de mensagens será feito por um worker em segundo plano (em desenvolvimento).
+              O worker em segundo plano processa todas as contas guardadas (UNSEEN + marco zero por conta).
             </p>
           </>
         )}
